@@ -4,161 +4,104 @@ import plotly.graph_objects as go
 from datetime import datetime
 from openai import OpenAI
 import os
-import time
 
-# --- 1. 核心設定 & 語言包 ---
+# --- 1. 核心設定 ---
 st.set_page_config(page_title="RV Fit", page_icon="🍰", layout="centered")
 
-# 初始化 Session State (為了翻牌效果和語言)
-if 'flip_weight' not in st.session_state: st.session_state.flip_weight = 'morning' # morning or evening
-if 'flip_workout' not in st.session_state: st.session_state.flip_workout = 'input'   # input or history
+# 初始化 Session State
+if 'flip_weight' not in st.session_state: st.session_state.flip_weight = 'morning'
+if 'flip_workout' not in st.session_state: st.session_state.flip_workout = 'input'
 if 'language' not in st.session_state: st.session_state.language = '繁體中文'
-
-# 語言字典
-LANG = {
-    '繁體中文': {
-        'date': '日期', 'sel_date': '選擇日期',
-        'mor_title': '☀️ Seulgi Morning', 'eve_title': '🌙 Wendy Evening',
-        'mor_ph': '早晨空腹 (kg)', 'eve_ph': '晚間睡前 (kg)',
-        'flip_to_eve': '➡️ 換面：紀錄晚上', 'flip_to_mor': '⬅️ 換面：紀錄早上',
-        'work_title': '🏃‍♀️ Workout Log', 'work_hist': '📜 Past Records',
-        'work_ph': '輸入運動內容 (Enter 自動儲存)',
-        'flip_to_hist': '查看歷史紀錄', 'flip_to_inp': '返回紀錄運動',
-        'chart_title': '📈 Body Trends',
-        'ai_loading': '94 Line 正在觀察你的數據...',
-        'saved': '已自動儲存',
-        'weekdays': ['週一', '週二', '週三', '週四', '週五', '週六', '週日']
-    },
-    'English': {
-        'date': 'Date', 'sel_date': 'Select Date',
-        'mor_title': '☀️ Seulgi Morning', 'eve_title': '🌙 Wendy Evening',
-        'mor_ph': 'Morning Weight (kg)', 'eve_ph': 'Evening Weight (kg)',
-        'flip_to_eve': '➡️ Flip: Evening', 'flip_to_mor': '⬅️ Flip: Morning',
-        'work_title': '🏃‍♀️ Workout Log', 'work_hist': '📜 Past Records',
-        'work_ph': 'Type workout here...',
-        'flip_to_hist': 'View History', 'flip_to_inp': 'Back to Input',
-        'chart_title': '📈 Body Trends',
-        'ai_loading': '94 Line is analyzing...',
-        'saved': 'Auto-saved',
-        'weekdays': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-    },
-    'Deutsch': {
-        'date': 'Datum', 'sel_date': 'Datum wählen',
-        'mor_title': '☀️ Seulgi Morgen', 'eve_title': '🌙 Wendy Abend',
-        'mor_ph': 'Morgengewicht (kg)', 'eve_ph': 'Abendgewicht (kg)',
-        'flip_to_eve': '➡️ Zu Abend', 'flip_to_mor': '⬅️ Zu Morgen',
-        'work_title': '🏃‍♀️ Training', 'work_hist': '📜 Protokolle',
-        'work_ph': 'Training eingeben...',
-        'flip_to_hist': 'Verlauf ansehen', 'flip_to_inp': 'Zurück zur Eingabe',
-        'chart_title': '📈 Körpertrends',
-        'ai_loading': '94 Line analysiert...',
-        'saved': 'Automatisch gespeichert',
-        'weekdays': ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So']
-    }
-}
-
-# 取得當前語言文字
-txt = LANG[st.session_state.language]
+if 'ai_msg' not in st.session_state: st.session_state.ai_msg = None
 
 # 配色定義
 COLORS = {
-    "bg": "#FFF0F2", # 淺粉紅背景
+    "bg": "#FFF0F2",
     "card_bg": "#FFFFFF",
-    "seulgi": "#ff9f43",
-    "wendy": "#273c75",
+    "seulgi": "#ff9f43", # Orange
+    "wendy": "#273c75",  # Blue
     "text": "#555555"
 }
 
+# 根據目前翻面狀態決定主色
 current_color = COLORS['seulgi'] if st.session_state.flip_weight == 'morning' else COLORS['wendy']
 
-# --- 2. 暴力美學 CSS (隱藏邊框、卡片化、圓角) ---
+# --- 2. CSS 魔法 (視覺整形手術) ---
 st.markdown(f"""
     <style>
-    /* 1. 整體背景 */
-    .stApp {{
-        background-color: {COLORS['bg']};
-    }}
+    /* 全局背景 */
+    .stApp {{ background-color: {COLORS['bg']}; }}
     
-    /* 2. 隱藏醜醜的 Header/Footer 和選單框框 */
+    /* 隱藏預設 Header/Footer */
     header {{visibility: hidden;}}
     .stDeployButton {{display:none;}}
     
-    /* 3. 卡片容器樣式 */
+    /* === 核心卡片樣式 === */
     .css-card {{
-        background-color: {COLORS['card_bg']};
-        border-radius: 25px;
-        padding: 25px;
-        box-shadow: 0 10px 20px rgba(0,0,0,0.05);
+        background-color: white;
+        border-radius: 20px;
+        padding: 20px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.05);
         margin-bottom: 20px;
-        transition: 0.3s;
         border-top: 5px solid {current_color};
+        text-align: center;
+    }}
+    
+    /* 讓按鈕看起來像標題 (Clickable Header) */
+    div[data-testid="stButton"] button {{
+        width: 100%;
+        border: none;
+        background-color: transparent;
+        color: {current_color};
+        font-family: 'Helvetica Neue', sans-serif;
+        font-size: 24px;
+        font-weight: 800;
+        padding: 10px 0;
+        transition: 0.3s;
+    }}
+    div[data-testid="stButton"] button:hover {{
+        background-color: #f8f9fa; /* 輕微反灰提示可點擊 */
+        color: {current_color};
+    }}
+    div[data-testid="stButton"] button:focus {{
+        box-shadow: none;
+        color: {current_color};
     }}
 
-    /* 4. 隱藏輸入框邊框 (融入背景) */
+    /* 輸入框完全隱形化 (融入卡片) */
     div[data-baseweb="input"] {{
         background-color: transparent !important;
         border: none !important;
-        border-bottom: 2px solid #eee !important; /* 只留底線 */
-        border-radius: 0px !important;
-    }}
-    div[data-baseweb="base-input"] {{
-        background-color: transparent !important;
+        border-bottom: 2px solid #eee !important;
     }}
     input {{
-        font-size: 24px !important;
-        color: {COLORS['text']} !important;
-        background-color: transparent !important;
         text-align: center;
+        font-size: 28px !important;
         font-weight: bold;
+        color: #333 !important;
+        background-color: transparent !important;
     }}
-    /* 移除數字輸入的加減按鈕 */
+    /* 移除數字加減按鈕 */
     input[type=number]::-webkit-inner-spin-button, 
-    input[type=number]::-webkit-outer-spin-button {{ 
-        -webkit-appearance: none; 
-        margin: 0; 
-    }}
-    
-    /* 5. 文字區域 (Text Area) */
-    textarea {{
-        background-color: #fafafa !important;
-        border: none !important;
-        border-radius: 15px !important;
-        padding: 15px !important;
-    }}
+    input[type=number]::-webkit-outer-spin-button {{ -webkit-appearance: none; margin: 0; }}
 
-    /* 6. 按鈕美化 (圓角藥丸狀) */
-    .stButton>button {{
-        border-radius: 50px;
-        border: 1px solid #ddd;
-        background-color: white;
-        color: #888;
-        font-size: 14px;
-        padding: 5px 15px;
-        transition: 0.3s;
-    }}
-    .stButton>button:hover {{
-        border-color: {current_color};
-        color: {current_color};
-    }}
-    
-    /* 7. 下拉選單隱藏邊框 */
-    div[data-baseweb="select"] > div {{
-        background-color: transparent;
-        border: none;
-        color: #888;
-    }}
-    
-    /* 8. 標題字型 */
-    h1, h2, h3 {{
-        font-family: 'Helvetica Neue', sans-serif;
-        font-weight: 700;
-        color: {current_color} !important;
+    /* 日期選擇器置中優化 */
+    div[data-testid="stDateInput"] {{
         text-align: center;
+        margin: 0 auto;
+    }}
+    div[data-testid="stDateInput"] input {{
+        text-align: center;
+    }}
+    
+    /* 語言選單隱藏 */
+    div[data-testid="stSelectbox"] {{
+        border: none;
     }}
     </style>
 """, unsafe_allow_html=True)
 
-# --- 3. 資料處理 (含自動儲存邏輯) ---
+# --- 3. 資料處理 ---
 DATA_FILE = 'rv_log.csv'
 
 def load_data():
@@ -169,190 +112,168 @@ def load_data():
 def save_data(df):
     df.to_csv(DATA_FILE, index=False)
 
-# 讀取資料
 df = load_data()
 
-# 自動儲存 Callback 函數
+# 自動儲存
 def auto_save():
-    # 從 session_state 抓取最新值
     d = str(st.session_state.input_date)
     m = st.session_state.get('val_morning', 0.0)
     e = st.session_state.get('val_evening', 0.0)
     ex = st.session_state.get('val_exercise', "")
     
-    # 處理資料
     global df
-    new_entry = {
-        "Date": d,
-        "Morning_Weight": m,
-        "Evening_Weight": e,
-        "Exercise": ex,
-        "AI_Comment": "" # AI 稍後處理
-    }
-    
+    new_entry = {"Date": d, "Morning_Weight": m, "Evening_Weight": e, "Exercise": ex, "AI_Comment": ""}
     df = df[df['Date'] != d]
     df = pd.concat([pd.DataFrame([new_entry]), df], ignore_index=True)
     df = df.sort_values(by="Date")
     save_data(df)
-    st.toast(txt['saved'], icon="✅") # 顯示一個小小的通知
+    st.toast("✅ 自動儲存完成 (Saved)")
 
-# --- 4. 介面開始 ---
+# --- 4. 介面佈局 ---
 
-# 頂部：語言選擇 (隱藏式設計)
-col_L, col_R = st.columns([8, 2])
-with col_R:
-    lang_opt = st.selectbox(
-        "Language", 
-        ['繁體中文', 'English', 'Deutsch'], 
-        label_visibility="collapsed",
-        key='language_selector',
-        on_change=lambda: st.session_state.update({'language': st.session_state.language_selector})
-    )
+# [Top] 語言選擇 (右上角小小的)
+col_top1, col_top2 = st.columns([8, 2])
+with col_top2:
+    st.selectbox("Language", ['繁體中文', 'English', 'Deutsch'], label_visibility="collapsed", key='language')
 
-# 標題日期區
-st.title("RV 94 Fit")
-col_d1, col_d2 = st.columns([1,2]) # 置中調整
-with col_d2:
-    # 這裡放日期選擇，樣式已透過CSS隱藏邊框
-    input_date = st.date_input(
-        txt['sel_date'], 
-        datetime.now(), 
-        label_visibility="collapsed",
-        key="input_date",
-        on_change=auto_save
-    )
+# [Block 1] 日期選擇 (絕對置中)
+st.markdown("<br>", unsafe_allow_html=True) # 一點間距
+c1, c2, c3 = st.columns([1, 2, 1])
+with c2:
+    # 這裡放日期，CSS 會讓它置中
+    input_date = st.date_input("Date", datetime.now(), label_visibility="collapsed", key="input_date", on_change=auto_save)
 
-# 取得當日資料以顯示預設值
+# 抓取今日資料
 current_data = df[df['Date'] == str(input_date)]
-def_mor = float(current_data.iloc[0]['Morning_Weight']) if not current_data.empty else 0.0
-def_eve = float(current_data.iloc[0]['Evening_Weight']) if not current_data.empty else 0.0
-def_ex = str(current_data.iloc[0]['Exercise']) if not current_data.empty and pd.notna(current_data.iloc[0]['Exercise']) else ""
+d_mor = float(current_data.iloc[0]['Morning_Weight']) if not current_data.empty else 0.0
+d_eve = float(current_data.iloc[0]['Evening_Weight']) if not current_data.empty else 0.0
+d_ex = str(current_data.iloc[0]['Exercise']) if not current_data.empty and pd.notna(current_data.iloc[0]['Exercise']) else ""
 
-# --- 卡片 1: 體重翻轉卡 (Flip Card) ---
-st.markdown('<div class="css-card">', unsafe_allow_html=True)
+# [Block 2] 體重卡片 (Weight Card)
+# 這裡用 container 來模擬一張卡片
+with st.container():
+    st.markdown(f'<div class="css-card">', unsafe_allow_html=True)
+    
+    if st.session_state.flip_weight == 'morning':
+        # 標題就是按鈕
+        if st.button("☀️ Seulgi Morning (點擊切換)", key="btn_mor"):
+            st.session_state.flip_weight = 'evening'
+            st.rerun()
+        
+        # 輸入框 (在卡片內)
+        st.number_input("Input", value=d_mor, step=0.0, format="%.1f", key="val_morning", on_change=auto_save, label_visibility="collapsed")
+        st.caption("輸入早晨空腹體重 (kg)")
 
-# 決定顯示哪一面
-if st.session_state.flip_weight == 'morning':
-    st.subheader(txt['mor_title'])
-    # 鍵盤輸入，無 step 按鈕
-    st.number_input(
-        txt['mor_ph'], value=def_mor, step=0.0, format="%.1f",
-        key="val_morning", on_change=auto_save, label_visibility="collapsed"
-    )
-    # 翻面按鈕
-    if st.button(txt['flip_to_eve'], use_container_width=True):
-        st.session_state.flip_weight = 'evening'
-        st.rerun()
-else:
-    st.subheader(txt['eve_title'])
-    st.number_input(
-        txt['eve_ph'], value=def_eve, step=0.0, format="%.1f",
-        key="val_evening", on_change=auto_save, label_visibility="collapsed"
-    )
-    # 翻面按鈕
-    if st.button(txt['flip_to_mor'], use_container_width=True):
-        st.session_state.flip_weight = 'morning'
-        st.rerun()
-
-st.markdown('</div>', unsafe_allow_html=True)
-
-# --- 卡片 2: 運動翻轉卡 (Workout Card) ---
-st.markdown('<div class="css-card" style="border-top: 5px solid #6c5ce7;">', unsafe_allow_html=True)
-
-if st.session_state.flip_workout == 'input':
-    st.subheader(txt['work_title'])
-    st.text_area(
-        txt['work_ph'], value=def_ex, height=100,
-        key="val_exercise", on_change=auto_save, label_visibility="collapsed"
-    )
-    if st.button(txt['flip_to_hist'], use_container_width=True):
-        st.session_state.flip_workout = 'history'
-        st.rerun()
-else:
-    st.subheader(txt['work_hist'])
-    # 顯示過去 3 筆運動紀錄
-    if not df.empty:
-        # 簡單計算卡路里 (模擬 AI)
-        hist_df = df[df['Exercise'].notna() & (df['Exercise'] != "")].sort_values('Date', ascending=False).head(3)
-        for index, row in hist_df.iterrows():
-            st.markdown(f"**{row['Date']}**: {row['Exercise']}")
-            st.caption(f"🔥 Est. Burn: 250 kcal (AI calculated)") # 這裡可以之後接真正的 AI
-            st.divider()
     else:
-        st.caption("No records yet.")
-    
-    if st.button(txt['flip_to_inp'], use_container_width=True):
-        st.session_state.flip_workout = 'input'
-        st.rerun()
+        # 標題就是按鈕
+        if st.button("🌙 Wendy Evening (點擊切換)", key="btn_eve"):
+            st.session_state.flip_weight = 'morning'
+            st.rerun()
+            
+        # 輸入框 (在卡片內)
+        st.number_input("Input", value=d_eve, step=0.0, format="%.1f", key="val_evening", on_change=auto_save, label_visibility="collapsed")
+        st.caption("輸入晚間睡前體重 (kg)")
+        
+    st.markdown('</div>', unsafe_allow_html=True)
 
-st.markdown('</div>', unsafe_allow_html=True)
-
-# --- AI 主動提醒 (Auto Trigger) ---
-# 條件：今天有輸入體重，且尚未有當天的 AI 評論 (這裡簡化為每次重整都檢查並提示)
-has_data = (st.session_state.get('val_morning', 0) > 0 or st.session_state.get('val_evening', 0) > 0)
-if has_data and "OPENAI_API_KEY" in st.secrets:
-    # 不用按鈕，直接顯示一個漂亮的區塊
-    st.markdown("### 💬 94 Line's Message")
+# [Block 3] 運動卡片 (Workout Card)
+with st.container():
+    # 運動卡片邊框顏色固定為紫色或跟隨主題
+    wo_color = "#6c5ce7"
+    st.markdown(f'<div class="css-card" style="border-top: 5px solid {wo_color};">', unsafe_allow_html=True)
     
-    # 這裡我們用一個簡單的快取機制，不要每次都打 API 燒錢
-    # 實際運作：當你輸入完，它就會出現在這裡
-    
-    # 如果你要真的完全自動觸發，可以把這段 uncomment，但建議不要，因為打字過程會一直觸發
-    # 這裡我做成：顯示目前的建議，如果沒有則顯示「等待數據完整...」
-    
-    client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-    prompt = f"""
-    User: {st.session_state.get('val_morning')}kg / {st.session_state.get('val_evening')}kg. 
-    Workout: {st.session_state.get('val_exercise')}.
-    Language: {st.session_state.language}.
-    Roleplay: Red Velvet Seulgi (Warm) & Wendy (Strict). Short interaction.
-    """
-    # 為了節省 Token，這裡我們在 UI 上做一個 "Update" 的感覺，或者你可以選擇真的自動
-    # 這裡為了符合你的「主動提醒」需求，我們直接顯示：
-    
-    if 'last_ai_msg' not in st.session_state:
-        st.session_state.last_ai_msg = "等待今日數據輸入完成..."
+    if st.session_state.flip_workout == 'input':
+        if st.button("🏃‍♀️ Workout Log (點擊看歷史)", key="btn_wo_inp"):
+             st.session_state.flip_workout = 'history'
+             st.rerun()
+        
+        st.text_area("Input", value=d_ex, height=80, key="val_exercise", on_change=auto_save, label_visibility="collapsed", placeholder="今天做了什麼運動？")
+        
+    else:
+        if st.button("📜 Past Records (點擊輸入)", key="btn_wo_hist"):
+             st.session_state.flip_workout = 'input'
+             st.rerun()
+             
+        # 顯示歷史運動 (卡片背面)
+        if not df.empty:
+            hist = df[df['Exercise'].notna() & (df['Exercise']!="")].tail(3)
+            for _, r in hist.iterrows():
+                st.markdown(f"<div style='text-align:left; font-size:14px; color:#666; border-bottom:1px solid #eee; padding:5px;'><b>{r['Date']}</b>: {r['Exercise']}</div>", unsafe_allow_html=True)
+        else:
+            st.caption("暫無紀錄")
 
-    # 這裡設計一個邏輯：如果數據跟上次不一樣，就出現一個小按鈕讓使用者「接收訊息」
-    # 或者直接顯示最新的
-    if st.button("✨ Update 94 Line Message"):
-        try:
-            with st.spinner(txt['ai_loading']):
-                res = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role":"user","content":prompt}])
-                st.session_state.last_ai_msg = res.choices[0].message.content
-        except:
-            st.error("AI Error")
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    st.info(st.session_state.last_ai_msg)
+# [Block 4] AI 建議 (AI Block)
+# 只有當有資料時才顯示
+if d_mor > 0 or d_eve > 0 or d_ex != "":
+    with st.container():
+        st.markdown(f'<div class="css-card" style="border-top: 5px solid #00b894;">', unsafe_allow_html=True)
+        st.markdown(f"<h3 style='color:#00b894; margin:0;'>💬 94 Line Coach</h3>", unsafe_allow_html=True)
+        
+        if st.session_state.ai_msg:
+             st.markdown(f"<div style='text-align:left; padding-top:10px;'>{st.session_state.ai_msg}</div>", unsafe_allow_html=True)
+             if st.button("🔄 Refresh Advice"):
+                 st.session_state.ai_msg = None # Clear and rerun
+                 st.rerun()
+        else:
+            st.caption("根據今日數據生成建議...")
+            if st.button("✨ 取得建議 (Get Advice)"):
+                if "OPENAI_API_KEY" in st.secrets:
+                    client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+                    prompt = f"""
+                    User Data: Morning {d_mor}kg, Evening {d_eve}kg, Workout: {d_ex}.
+                    Roleplay: Red Velvet Seulgi (Warm/Cute) & Wendy (Strict/High Tension).
+                    Language: {st.session_state.language}.
+                    Provide a short, engaging feedback.
+                    """
+                    with st.spinner("Calling Seulgi & Wendy..."):
+                        try:
+                            res = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role":"user","content":prompt}])
+                            st.session_state.ai_msg = res.choices[0].message.content
+                            st.rerun()
+                        except:
+                            st.error("Connection Error")
+                else:
+                    st.warning("No API Key")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
 
-# --- 圖表與歷史 (二合一) ---
+# [Block 5] Body Trend (圖表二合一)
 if not df.empty:
-    st.markdown(f"### {txt['chart_title']}")
+    st.markdown(f'<div class="css-card" style="border-top: 5px solid #e17055;">', unsafe_allow_html=True)
+    st.markdown(f"<h3 style='color:#e17055; margin:0;'>📈 Body Trends</h3>", unsafe_allow_html=True)
     
     chart_df = df.sort_values(by="Date")
-    
     fig = go.Figure()
-    # Seulgi 線
+    
+    # Seulgi Line
     fig.add_trace(go.Scatter(
         x=chart_df['Date'], y=chart_df['Morning_Weight'],
-        mode='lines+markers', name='Seulgi (Morning)',
+        mode='lines+markers', name='Seulgi (早)',
         line=dict(color=COLORS['seulgi'], width=3),
-        hovertemplate='<b>%{x} (Morning)</b><br>Weight: %{y}kg<extra></extra>'
+        hovertemplate='<b>%{x|%m-%d} Morning</b><br>Weight: %{y}kg<extra></extra>' # 關鍵：自定義顯示格式
     ))
-    # Wendy 線
+    
+    # Wendy Line
     fig.add_trace(go.Scatter(
         x=chart_df['Date'], y=chart_df['Evening_Weight'],
-        mode='lines+markers', name='Wendy (Evening)',
+        mode='lines+markers', name='Wendy (晚)',
         line=dict(color=COLORS['wendy'], width=3, dash='dot'),
-        hovertemplate='<b>%{x} (Evening)</b><br>Weight: %{y}kg<extra></extra>'
+        hovertemplate='<b>%{x|%m-%d} Evening</b><br>Weight: %{y}kg<extra></extra>'
     ))
 
     fig.update_layout(
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(255,255,255,0)',
-        margin=dict(l=0, r=0, t=10, b=0),
-        legend=dict(orientation="h", y=1.1),
-        hovermode="x unified" # 這樣滑鼠移過去會同時顯示資訊
+        margin=dict(l=0, r=0, t=20, b=0),
+        legend=dict(orientation="h", y=-0.2), # Legend 移到下面比較乾淨
+        hovermode="x unified",
+        xaxis=dict(
+            tickformat="%m-%d", # X軸只顯示 月-日
+            showgrid=False
+        ),
+        yaxis=dict(showgrid=True, gridcolor='#eee')
     )
     st.plotly_chart(fig, use_container_width=True)
-    st.caption("👆 Tap on points to see details (點擊圖表看詳細日期)")
+    st.markdown('</div>', unsafe_allow_html=True)
